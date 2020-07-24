@@ -99,6 +99,8 @@ abstract private[writer] class HiveAcidWriter(val options: WriterOptions,
 
   lazy protected val taskId: Int =
     Utilities.getTaskIdFromFilename(TaskContext.get.taskAttemptId().toString).toInt
+  lazy protected val taskAttemptNumber: Int = Utilities.getTaskIdFromFilename(
+    TaskContext.get.attemptNumber().toString).toInt
 
   protected def getOrCreateWriter(partitionRow: InternalRow, acidBucketId: Int): Any = {
 
@@ -179,6 +181,8 @@ private[writer] class HiveAcidFullAcidWriter(options: WriterOptions,
 
   override protected def createWriter(path: Path, acidBucketId: Int): Any = {
 
+    logInfo(s"TASK: ${taskId}, TASK_ATTEMPT_NUMBER: ${taskAttemptNumber}, BUCKET_ID: ${acidBucketId} " +
+      s" creating record writer for path: ${path} ")
     val tableDesc = HiveAcidOptions.getFileSinkDesc.getTableInfo
 
     val recordUpdater = HiveFileFormatUtils.getAcidRecordUpdater(
@@ -223,7 +227,12 @@ private[writer] class HiveAcidFullAcidWriter(options: WriterOptions,
 
     def safeDeletePath(fs: FileSystem, path: Path): Unit = {
       try {
-        if (path != null && fs.exists(path)) {
+        logInfo(s"TASK: ${taskId}, TASK_ATTEMPT_NUMBER: ${taskAttemptNumber}, BUCKET_ID: ${acidBucketId}. " +
+          s". Checking path(if exists): ${path}")
+        val exists = fs.exists(path)
+        if (exists) {
+          logInfo(s"TASK: ${taskId}, TASK_ATTEMPT_NUMBER: ${taskAttemptNumber}, BUCKET_ID: ${acidBucketId}. " +
+            s". Safe deleting path: ${path}")
           fs.delete(path, false)
         }
       } catch {
@@ -235,16 +244,25 @@ private[writer] class HiveAcidFullAcidWriter(options: WriterOptions,
 
     if (createDelta) {
       // Delete delta bucket file if exists. It can exist in the cases of task retries.
-      safeDeletePath(fs, AcidUtils.createFilename(path, acidOutputFormatOptions))
+      val deltaBucketPath = AcidUtils.createFilename(path, acidOutputFormatOptions)
+      if (deltaBucketPath != null) {
+        safeDeletePath(fs, deltaBucketPath)
+      }
       createVersionFile(acidOutputFormatOptions)
     }
 
     if (createDeleteDelta) {
       // Delete delete_delta bucket file if it exists. It can exist in the cases of task retries.
       val deleteDeltaOptions = acidOutputFormatOptions.clone().writingDeleteDelta(true)
-      safeDeletePath(fs, AcidUtils.createFilename(path, deleteDeltaOptions))
+      val deleteDeltaBucketPath = AcidUtils.createFilename(path, deleteDeltaOptions)
+      if (deleteDeltaBucketPath != null) {
+        safeDeletePath(fs, deleteDeltaBucketPath)
+      }
       createVersionFile(deleteDeltaOptions)
     }
+
+    logInfo(s"TASK: ${taskId}, TASK_ATTEMPT_NUMBER: ${taskAttemptNumber}, BUCKET_ID: ${acidBucketId}. " +
+      s" successfully created record writer for path: ${path} ")
     recordUpdater
   }
 
