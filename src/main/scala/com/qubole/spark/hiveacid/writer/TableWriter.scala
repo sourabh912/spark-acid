@@ -180,6 +180,7 @@ private[hiveacid] class TableWriter(sparkSession: SparkSession,
           //
           // There is still a chance that rows from multiple buckets go to same partition as well, but this is expected to work!
           case HiveAcidOperation.DELETE | HiveAcidOperation.UPDATE =>
+
             val bucketExpr = "shiftRightUnsigned(rowId.bucketId & 268369920, 16)"
 
             val baseDf = df.repartition(MAX_NUMBER_OF_BUCKETS, functions.expr(bucketExpr))
@@ -247,7 +248,6 @@ private[hiveacid] class TableWriter(sparkSession: SparkSession,
               }
               case _ => //
             }
-
             returnRdd
           case HiveAcidOperation.INSERT_OVERWRITE | HiveAcidOperation.INSERT_INTO =>
             df.queryExecution.executedPlan.execute()
