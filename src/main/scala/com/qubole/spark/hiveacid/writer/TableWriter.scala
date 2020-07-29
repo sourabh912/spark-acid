@@ -19,6 +19,8 @@
 
 package com.qubole.spark.hiveacid.writer
 
+import com.qubole.shaded.hadoop.hive.ql.io.BucketCodec
+
 import scala.collection.JavaConverters._
 import scala.language.implicitConversions
 import com.qubole.spark.hiveacid._
@@ -27,13 +29,15 @@ import com.qubole.spark.hiveacid.writer.hive.{HiveAcidFullAcidWriter, HiveAcidIn
 import com.qubole.spark.hiveacid.transaction._
 import com.qubole.spark.hiveacid.util.SerializableConfiguration
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.{DataFrame, SparkSession, functions}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession, SqlUtils, functions}
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
-import org.apache.spark.sql.catalyst.expressions.Attribute
+import org.apache.spark.sql.catalyst.expressions.{Attribute, GenericRowWithSchema}
 import org.apache.spark.sql.execution.command.AlterTableAddPartitionCommand
 import org.apache.spark.sql.execution.datasources.PartitioningUtils
 import org.apache.spark.sql.types.StructType
+
+import scala.collection.mutable
 
 /**
  * Performs eager write of a dataframe df to a hive acid table based on operationType
@@ -176,9 +180,75 @@ private[hiveacid] class TableWriter(sparkSession: SparkSession,
           //
           // There is still a chance that rows from multiple buckets go to same partition as well, but this is expected to work!
           case HiveAcidOperation.DELETE | HiveAcidOperation.UPDATE =>
-            df.repartition(MAX_NUMBER_OF_BUCKETS, functions.expr("shiftright(rowId.bucketId & 268369920, 16)"))
-              .toDF.sortWithinPartitions("rowId.writeId", "rowId.bucketId", "rowId.rowId")
-              .toDF.queryExecution.executedPlan.execute()
+            val bucketExpr = "shiftRightUnsigned(rowId.bucketId & 268369920, 16)"
+
+            val baseDf = df.repartition(MAX_NUMBER_OF_BUCKETS, functions.expr(bucketExpr))
+            val baseRdd = baseDf.rdd
+
+            val newDF = SqlUtils.createDataFrameUsingAttributes(sparkSession, baseRdd,
+              baseDf.schema, baseDf.queryExecution.analyzed.output)
+            val returnDF = newDF.
+              sortWithinPartitions("rowId.writeId", "rowId.bucketId", "rowId.rowId").toDF
+
+            val returnRdd = returnDF.queryExecution.executedPlan.execute()
+
+            val fetchBucketInfo = new ((Int,Iterator[Row]) => Iterator[(Int, mutable.Set[(Int, Int, Int, Int)])])
+              with Serializable {
+              override def apply(partNum: Int, iter: Iterator[Row]): Iterator[(Int, mutable.Set[(Int, Int, Int, Int)])] = {
+                val set: mutable.Set[(Int, Int, Int, Int)] = mutable.Set.empty[(Int, Int, Int, Int)]
+                iter.foreach {
+                  elem: Row => {
+                    val genericRow = elem.asInstanceOf[GenericRowWithSchema]
+                    val bucketProperty = genericRow.getAs[GenericRowWithSchema]("rowId")
+                      .getAs[Int]("bucketId")
+                    val bucketID = BucketCodec.V1.decodeWriterId(bucketProperty)
+                    val statementId = BucketCodec.V1.decodeStatementId(bucketProperty)
+                    val bucketShiftRightCol = elem.getAs[Int]("bucketShiftRightCol")
+                    set.add((bucketProperty, bucketID, statementId, bucketShiftRightCol))
+
+                  }
+                }
+                Iterator((partNum, set))
+              }
+            }
+
+            val repartitionedDFValues = newDF.withColumn("bucketShiftRightCol",
+              functions.expr(bucketExpr)).rdd.mapPartitionsWithIndex {
+              fetchBucketInfo
+            }.collect()
+
+            val sortedWithInPartitionDFValues = newDF
+              .sortWithinPartitions("rowId.writeId", "rowId.bucketId", "rowId.rowId")
+              .withColumn("bucketShiftRightCol",
+                functions.expr(bucketExpr)).rdd.mapPartitionsWithIndex {
+              fetchBucketInfo
+            }.collect()
+
+            repartitionedDFValues.foreach {
+              case (part: Int, set:  mutable.Set[(Int, Int, Int, Int)]) => {
+                set.foreach {
+                  case (bucketProperty, bucketID, stmId, bucketShiftRightCol) =>
+                    logInfo(s"repartitionedDFValues -> partition: ${part}, bucketProperty: ${bucketProperty}, " +
+                      s"bucketID: ${bucketID}," +
+                      s" statementID: ${stmId}, bucketShiftRightCol: ${bucketShiftRightCol}")
+                }
+              }
+              case _ => //
+            }
+
+            sortedWithInPartitionDFValues.foreach {
+              case (part: Int, set:  mutable.Set[(Int, Int, Int, Int)]) => {
+                set.foreach {
+                  case (bucketProperty, bucketID, stmId, bucketShiftRightCol) =>
+                    logInfo(s"sortedWithInPartitionDFValues -> partition: ${part}, bucketProperty: ${bucketProperty}, " +
+                      s"bucketID: ${bucketID}," +
+                      s" statementID: ${stmId}, bucketShiftRightCol: ${bucketShiftRightCol}")
+                }
+              }
+              case _ => //
+            }
+
+            returnRdd
           case HiveAcidOperation.INSERT_OVERWRITE | HiveAcidOperation.INSERT_INTO =>
             df.queryExecution.executedPlan.execute()
           case unknownOperation =>
