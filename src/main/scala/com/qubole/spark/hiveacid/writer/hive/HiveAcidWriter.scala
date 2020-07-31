@@ -31,6 +31,7 @@ import com.qubole.shaded.hadoop.hive.serde2.{Deserializer, SerDeUtils}
 import com.qubole.shaded.hadoop.hive.serde2.Serializer
 import com.qubole.shaded.hadoop.hive.serde2.objectinspector.{ObjectInspector, ObjectInspectorFactory, ObjectInspectorUtils, StructObjectInspector}
 import com.qubole.shaded.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils.ObjectInspectorCopyOption
+import com.qubole.spark.hiveacid.hive.HiveAcidMetadata
 import com.qubole.spark.hiveacid.{HiveAcidErrors, HiveAcidOperation}
 import com.qubole.spark.hiveacid.util.Util
 import com.qubole.spark.hiveacid.writer.{Writer, WriterOptions}
@@ -278,7 +279,7 @@ private[writer] class HiveAcidFullAcidWriter(options: WriterOptions,
           Utilities.getTaskIdFromFilename(TaskContext.getPartitionId().toString)
             .toInt
         case HiveAcidOperation.DELETE | HiveAcidOperation.UPDATE =>
-          val rowID = dataRow.get(rowIdColNum, options.rowIDSchema)
+          val rowID = dataRow.get(rowIdColNum, HiveAcidMetadata.rowIdSchema)
           // FIXME: Currently hard coding codec as V1 and also bucket ordinal as 1.
           BucketCodec.V1.decodeWriterId(rowID.asInstanceOf[UnsafeRow].getInt(1))
         case x =>

@@ -104,6 +104,10 @@ private[hiveacid] class TableWriter(sparkSession: SparkSession,
     val hadoopConf = sparkSession.sessionState.newHadoopConf()
 
     val (allColumns, partitionColumns, dataColumns) = getColumns(operationType, df)
+    logInfo(s"Table schema for operationType: ${operationType} as per HiveAcidMetadata: ${getSchema(operationType)}")
+    logInfo(s"Dataframe schema for operationType: ${operationType}: ${df.queryExecution.executedPlan.schema}")
+    logInfo(s"For operationType: ${operationType}, " +
+      s"allColumns: ${allColumns.map(_.name)} \n\n partitionColumns: ${partitionColumns.map(_.name)} \n\ndataColumns: ${dataColumns.map(_.name)}")
 
     try {
 
