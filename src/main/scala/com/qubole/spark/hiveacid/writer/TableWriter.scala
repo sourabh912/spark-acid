@@ -196,6 +196,7 @@ private[hiveacid] class TableWriter(sparkSession: SparkSession,
               sortWithinPartitions("rowId.writeId", "rowId.bucketId", "rowId.rowId").toDF
 
             val returnRdd = returnDF.queryExecution.executedPlan.execute()
+            logInfo(s"Dataframe schema of returnDF: ${returnDF.queryExecution.executedPlan.schema}")
 
             val fetchBucketInfo = new ((Int,Iterator[Row]) => Iterator[(Int, mutable.Set[(Int, Int, Int, Int)])])
               with Serializable {
